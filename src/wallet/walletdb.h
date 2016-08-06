@@ -76,7 +76,8 @@ public:
     static const int VERSION_BASIC=1;
     static const int VERSION_WITH_FLAGS=2;
     static const int VERSION_WITH_HDDATA=10;
-    static const int CURRENT_VERSION=VERSION_WITH_HDDATA;
+    static const int VERSION_WITH_META=11;
+    static const int CURRENT_VERSION=VERSION_WITH_META;
 
     static const uint8_t KEY_ORIGIN_UNSET         = 0x0000;
     static const uint8_t KEY_ORIGIN_UNKNOWN       = 0x0001;
@@ -88,9 +89,7 @@ public:
     int64_t nCreateTime; // 0 means unknown
     std::string hdKeypath; //optional HD/bip32 keypath
     CKeyID hdMasterKeyID; //id of the HD masterkey used to derive this key
-private:
-    uint8_t keyFlags;
-public:
+    std::map<std::string, std::string> mapMeta;
 
     CKeyMetadata()
     {
@@ -100,13 +99,15 @@ public:
     {
         SetNull();
         nCreateTime = nCreateTime_;
-        keyFlags = KEY_ORIGIN_UNSET;
     }
 
     ADD_SERIALIZE_METHODS;
 
     template <typename Stream, typename Operation>
     inline void SerializationOp(Stream& s, Operation ser_action, int nType, int nVersion) {
+        if (ser_action.ForRead()) {
+            SetNull();
+        }
         READWRITE(this->nVersion);
         nVersion = this->nVersion;
         READWRITE(nCreateTime);
@@ -114,10 +115,22 @@ public:
         {
             READWRITE(hdKeypath);
             READWRITE(hdMasterKeyID);
+            if (nVersion >= VERSION_WITH_META) {
+                READWRITE(mapMeta);
+            }
         }
         else
         if (nVersion >= VERSION_WITH_FLAGS)
+        {
+            uint8_t keyFlags;
+            if (!ser_action.ForRead()) {
+                keyFlags = GetKeyOrigin();
+            }
             READWRITE(keyFlags);
+            if (ser_action.ForRead()) {
+                SetKeyOrigin(keyFlags);
+            }
+        }
     }
 
     void SetNull()
@@ -126,15 +139,30 @@ public:
         nCreateTime = 0;
         hdKeypath.clear();
         hdMasterKeyID.SetNull();
-        keyFlags = KEY_ORIGIN_UNSET;
+        mapMeta.clear();
     }
 
     void SetKeyOrigin(const uint8_t n) {
-        keyFlags = n;
+        const char * const p = (const char *)&n;
+        const auto it = mapMeta.find("origin");
+        if (it == mapMeta.end()) {
+            std::string s(p, 1);
+            mapMeta["origin"] = s;
+        } else {
+            // Avoid losing additional bytes, which might be future extension
+            if (it->second.size() < 1) {
+                it->second.resize(1);
+            }
+            it->second[0] = *p;
+        }
     }
 
     uint8_t GetKeyOrigin() const {
-        return keyFlags;
+        const auto it = mapMeta.find("origin");
+        if (it == mapMeta.end() || it->second.size() < 1) {
+            return KEY_ORIGIN_UNSET;
+        }
+        return it->second[0];
     }
 };
 
