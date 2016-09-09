@@ -14,6 +14,7 @@
 #include "guiutil.h"
 #include "platformstyle.h"
 #include "bantablemodel.h"
+#include "walletmodel.h"
 
 #include "chainparams.h"
 #include "netbase.h"
@@ -73,7 +74,7 @@ class RPCExecutor : public QObject
     Q_OBJECT
 
 public Q_SLOTS:
-    void request(const QString &command);
+    void request(const QString &command, void *ppwallet);
 
 Q_SIGNALS:
     void reply(int category, const QString &command);
@@ -132,7 +133,7 @@ public:
  * @param[in]    strCommand  Command line to split
  */
 
-bool RPCConsole::RPCExecuteCommandLine(std::string &strResult, const std::string &strCommand)
+bool RPCConsole::RPCExecuteCommandLine(std::string &strResult, const std::string &strCommand, void * const ppwallet_v)
 {
     std::vector< std::vector<std::string> > stack;
     stack.push_back(std::vector<std::string>());
@@ -253,8 +254,11 @@ bool RPCConsole::RPCExecuteCommandLine(std::string &strResult, const std::string
                         req.params = RPCConvertValues(stack.back()[0], std::vector<std::string>(stack.back().begin() + 1, stack.back().end()));
                         req.strMethod = stack.back()[0];
 #ifdef ENABLE_WALLET
-                        // TODO: Some way to access secondary wallets
-                        req.wallet = vpwallets.empty() ? NULL : vpwallets[0];
+                        CWallet_ptr * const ppwallet = (CWallet_ptr*)ppwallet_v;
+                        if (ppwallet) {
+                            req.wallet = *ppwallet;
+                            delete ppwallet;
+                        }
 #endif
                         lastResult = tableRPC.execute(req);
 
@@ -313,13 +317,13 @@ bool RPCConsole::RPCExecuteCommandLine(std::string &strResult, const std::string
     }
 }
 
-void RPCExecutor::request(const QString &command)
+void RPCExecutor::request(const QString &command, void * const ppwallet_v)
 {
     try
     {
         std::string result;
         std::string executableCommand = command.toStdString() + "\n";
-        if(!RPCConsole::RPCExecuteCommandLine(result, executableCommand))
+        if(!RPCConsole::RPCExecuteCommandLine(result, executableCommand, ppwallet_v))
         {
             Q_EMIT reply(RPCConsole::CMD_ERROR, QString("Parse error: unbalanced ' or \""));
             return;
@@ -403,6 +407,12 @@ RPCConsole::RPCConsole(const PlatformStyle *_platformStyle, QWidget *parent) :
 
 RPCConsole::~RPCConsole()
 {
+#ifdef ENABLE_WALLET
+    for (int i = ui->WalletSelector->count(); --i >= 1; ) {
+        CWallet_ptr * const ppwallet = (CWallet_ptr*)ui->WalletSelector->itemData(i).value<void*>();
+        delete ppwallet;
+    }
+#endif
     GUIUtil::saveWindowGeometry("nRPCConsoleWindow", this);
     Q_EMIT stopExecutor();
     RPCUnsetTimerInterface(rpcTimerInterface);
@@ -571,6 +581,18 @@ void RPCConsole::setClientModel(ClientModel *model)
     }
 }
 
+#ifdef ENABLE_WALLET
+void RPCConsole::addWallet(const QString name, WalletModel * const walletModel)
+{
+    CWallet_ptr * const ppwallet = new CWallet_ptr(walletModel->getWallet());
+    ui->WalletSelector->addItem(name, QVariant::fromValue((void*)(ppwallet)));
+    if (ui->WalletSelector->count() == 2 && !isVisible()) {
+        // First wallet added, set to default so long as the window isn't presently visible (and potentially in use)
+        ui->WalletSelector->setCurrentIndex(1);
+    }
+}
+#endif
+
 static QString categoryClass(int category)
 {
     switch(category)
@@ -717,8 +739,18 @@ void RPCConsole::on_lineEdit_returnPressed()
 
     if(!cmd.isEmpty())
     {
+        void *ppwallet_v = NULL;
+#ifdef ENABLE_WALLET
+        const int wallet_index = ui->WalletSelector->currentIndex();
+        if (wallet_index > 0) {
+            CWallet_ptr *ppwallet = (CWallet_ptr*)ui->WalletSelector->itemData(wallet_index).value<void*>();
+            ppwallet = new CWallet_ptr(*ppwallet);  // Refcount
+            ppwallet_v = (void*)ppwallet;
+        }
+#endif
+
         message(CMD_REQUEST, cmd);
-        Q_EMIT cmdRequest(cmd);
+        Q_EMIT cmdRequest(cmd, ppwallet_v);
         // Remove command, if already in history
         history.removeOne(cmd);
         // Append command to history
@@ -755,7 +787,7 @@ void RPCConsole::startExecutor()
     // Replies from executor object must go to this object
     connect(executor, SIGNAL(reply(int,QString)), this, SLOT(message(int,QString)));
     // Requests from this object must go to executor
-    connect(this, SIGNAL(cmdRequest(QString)), executor, SLOT(request(QString)));
+    connect(this, SIGNAL(cmdRequest(QString, void*)), executor, SLOT(request(QString, void*)));
 
     // On stopExecutor signal
     // - queue executor for deletion (in execution thread)
