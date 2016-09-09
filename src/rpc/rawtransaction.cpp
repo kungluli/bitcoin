@@ -35,6 +35,9 @@
 
 using namespace std;
 
+std::string HelpRequiringPassphrase(CWallet *);
+void EnsureWalletIsUnlocked(CWallet *);
+
 void ScriptPubKeyToJSON(const CScript& scriptPubKey, UniValue& out, bool fIncludeHex)
 {
     txnouttype type;
@@ -589,7 +592,7 @@ UniValue signrawtransaction(const JSONRPCRequest& request)
             "The third optional argument (may be null) is an array of base58-encoded private\n"
             "keys that, if given, will be the only keys used to sign the transaction.\n"
 #ifdef ENABLE_WALLET
-            + HelpRequiringPassphrase() + "\n"
+            + HelpRequiringPassphrase(pwalletMain) + "\n"
 #endif
 
             "\nArguments:\n"
@@ -704,7 +707,7 @@ UniValue signrawtransaction(const JSONRPCRequest& request)
     }
 #ifdef ENABLE_WALLET
     else if (pwalletMain)
-        EnsureWalletIsUnlocked();
+        EnsureWalletIsUnlocked(pwalletMain);
 #endif
 
     // Add previous txouts given in the RPC call:
