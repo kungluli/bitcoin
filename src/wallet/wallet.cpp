@@ -3485,13 +3485,17 @@ bool CWallet::InitLoadWallet()
         return true;
     }
 
-    std::string walletFile = GetArg("-wallet", DEFAULT_WALLET_DAT);
-
-    CWallet * const pwallet = CreateWalletFromFile(walletFile);
-    if (!pwallet) {
-        return false;
+    if (mapMultiArgs["-wallet"].empty()) {
+        mapMultiArgs["-wallet"].push_back(DEFAULT_WALLET_DAT);
     }
-    vpwallets.push_back(pwallet);
+
+    for (const std::string& walletFile : mapMultiArgs["-wallet"]) {
+        CWallet * const pwallet = CreateWalletFromFile(walletFile);
+        if (!pwallet) {
+            return false;
+        }
+        vpwallets.push_back(pwallet);
+    }
 
     return true;
 }
