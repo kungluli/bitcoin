@@ -18,6 +18,12 @@ layerIsVisible(false),
 userClosed(false)
 {
     ui->setupUi(this);
+
+    ui->contentWidget->setBackgroundRole(QPalette::ToolTipBase);
+    ui->contentWidget->setAutoFillBackground(true);
+    ui->contentWidget->setFrameShape(QFrame::Box);
+    ui->contentWidget->setForegroundRole(QPalette::ToolTipText);
+
     connect(ui->closeButton, SIGNAL(clicked()), this, SLOT(closeClicked()));
     if (parent) {
         parent->installEventFilter(this);
