@@ -29,6 +29,7 @@
 
 using namespace std;
 
+CWallet *GetWalletForJSONRPCRequest(const JSONRPCRequest&);
 void EnsureWalletIsUnlocked(CWallet *);
 bool EnsureWalletIsAvailable(CWallet *, bool avoidException);
 
@@ -77,7 +78,9 @@ std::string DecodeDumpString(const std::string &str) {
 
 UniValue importprivkey(const JSONRPCRequest& request)
 {
-    if (!EnsureWalletIsAvailable(pwalletMain, request.fHelp))
+    CWallet * const pwallet = GetWalletForJSONRPCRequest(request);
+
+    if (!EnsureWalletIsAvailable(pwallet, request.fHelp))
         return NullUniValue;
     
     if (request.fHelp || request.params.size() < 1 || request.params.size() > 3)
@@ -101,9 +104,9 @@ UniValue importprivkey(const JSONRPCRequest& request)
         );
 
 
-    LOCK2(cs_main, pwalletMain->cs_wallet);
+    LOCK2(cs_main, pwallet->cs_wallet);
 
-    EnsureWalletIsUnlocked(pwalletMain);
+    EnsureWalletIsUnlocked(pwallet);
 
     string strSecret = request.params[0].get_str();
     string strLabel = "";
@@ -130,23 +133,23 @@ UniValue importprivkey(const JSONRPCRequest& request)
     assert(key.VerifyPubKey(pubkey));
     CKeyID vchAddress = pubkey.GetID();
     {
-        pwalletMain->MarkDirty();
-        pwalletMain->SetAddressBook(vchAddress, strLabel, "receive");
+        pwallet->MarkDirty();
+        pwallet->SetAddressBook(vchAddress, strLabel, "receive");
 
         // Don't throw error in case a key is already there
-        if (pwalletMain->HaveKey(vchAddress))
+        if (pwallet->HaveKey(vchAddress))
             return NullUniValue;
 
-        pwalletMain->mapKeyMetadata[vchAddress].nCreateTime = 1;
+        pwallet->mapKeyMetadata[vchAddress].nCreateTime = 1;
 
-        if (!pwalletMain->AddKeyPubKey(key, pubkey))
+        if (!pwallet->AddKeyPubKey(key, pubkey))
             throw JSONRPCError(RPC_WALLET_ERROR, "Error adding key to wallet");
 
         // whenever a key is imported, we need to scan the whole chain
-        pwalletMain->nTimeFirstKey = 1; // 0 would be considered 'no value'
+        pwallet->nTimeFirstKey = 1; // 0 would be considered 'no value'
 
         if (fRescan) {
-            pwalletMain->ScanForWalletTransactions(chainActive.Genesis(), true);
+            pwallet->ScanForWalletTransactions(chainActive.Genesis(), true);
         }
     }
 
@@ -156,22 +159,22 @@ UniValue importprivkey(const JSONRPCRequest& request)
 void ImportAddress(CWallet*, const CBitcoinAddress& address, const string& strLabel);
 void ImportScript(CWallet * const pwallet, const CScript& script, const string& strLabel, bool isRedeemScript)
 {
-    if (!isRedeemScript && ::IsMine(*pwalletMain, script) == ISMINE_SPENDABLE)
+    if (!isRedeemScript && ::IsMine(*pwallet, script) == ISMINE_SPENDABLE)
         throw JSONRPCError(RPC_WALLET_ERROR, "The wallet already contains the private key for this address or script");
 
-    pwalletMain->MarkDirty();
+    pwallet->MarkDirty();
 
-    if (!pwalletMain->HaveWatchOnly(script) && !pwalletMain->AddWatchOnly(script))
+    if (!pwallet->HaveWatchOnly(script) && !pwallet->AddWatchOnly(script))
         throw JSONRPCError(RPC_WALLET_ERROR, "Error adding address to wallet");
 
     if (isRedeemScript) {
-        if (!pwalletMain->HaveCScript(script) && !pwalletMain->AddCScript(script))
+        if (!pwallet->HaveCScript(script) && !pwallet->AddCScript(script))
             throw JSONRPCError(RPC_WALLET_ERROR, "Error adding p2sh redeemScript to wallet");
         ImportAddress(pwallet, CBitcoinAddress(CScriptID(script)), strLabel);
     } else {
         CTxDestination destination;
         if (ExtractDestination(script, destination)) {
-            pwalletMain->SetAddressBook(destination, strLabel, "receive");
+            pwallet->SetAddressBook(destination, strLabel, "receive");
         }
     }
 }
@@ -187,7 +190,9 @@ void ImportAddress(CWallet * const pwallet, const CBitcoinAddress& address, cons
 
 UniValue importaddress(const JSONRPCRequest& request)
 {
-    if (!EnsureWalletIsAvailable(pwalletMain, request.fHelp))
+    CWallet * const pwallet = GetWalletForJSONRPCRequest(request);
+
+    if (!EnsureWalletIsAvailable(pwallet, request.fHelp))
         return NullUniValue;
     
     if (request.fHelp || request.params.size() < 1 || request.params.size() > 4)
@@ -230,24 +235,24 @@ UniValue importaddress(const JSONRPCRequest& request)
     if (request.params.size() > 3)
         fP2SH = request.params[3].get_bool();
 
-    LOCK2(cs_main, pwalletMain->cs_wallet);
+    LOCK2(cs_main, pwallet->cs_wallet);
 
     CBitcoinAddress address(request.params[0].get_str());
     if (address.IsValid()) {
         if (fP2SH)
             throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Cannot use the p2sh flag with an address - use a script instead");
-        ImportAddress(pwalletMain, address, strLabel);
+        ImportAddress(pwallet, address, strLabel);
     } else if (IsHex(request.params[0].get_str())) {
         std::vector<unsigned char> data(ParseHex(request.params[0].get_str()));
-        ImportScript(pwalletMain, CScript(data.begin(), data.end()), strLabel, fP2SH);
+        ImportScript(pwallet, CScript(data.begin(), data.end()), strLabel, fP2SH);
     } else {
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid Bitcoin address or script");
     }
 
     if (fRescan)
     {
-        pwalletMain->ScanForWalletTransactions(chainActive.Genesis(), true);
-        pwalletMain->ReacceptWalletTransactions();
+        pwallet->ScanForWalletTransactions(chainActive.Genesis(), true);
+        pwallet->ReacceptWalletTransactions();
     }
 
     return NullUniValue;
@@ -255,7 +260,9 @@ UniValue importaddress(const JSONRPCRequest& request)
 
 UniValue importprunedfunds(const JSONRPCRequest& request)
 {
-    if (!EnsureWalletIsAvailable(pwalletMain, request.fHelp))
+    CWallet * const pwallet = GetWalletForJSONRPCRequest(request);
+
+    if (!EnsureWalletIsAvailable(pwallet, request.fHelp))
         return NullUniValue;
 
     if (request.fHelp || request.params.size() != 2)
@@ -271,7 +278,7 @@ UniValue importprunedfunds(const JSONRPCRequest& request)
     if (!DecodeHexTx(tx, request.params[0].get_str()))
         throw JSONRPCError(RPC_DESERIALIZATION_ERROR, "TX decode failed");
     uint256 hashTx = tx.GetHash();
-    CWalletTx wtx(pwalletMain,tx);
+    CWalletTx wtx(pwallet,tx);
 
     CDataStream ssMB(ParseHexV(request.params[1], "proof"), SER_NETWORK, PROTOCOL_VERSION);
     CMerkleBlock merkleBlock;
@@ -302,10 +309,10 @@ UniValue importprunedfunds(const JSONRPCRequest& request)
     wtx.nIndex = txnIndex;
     wtx.hashBlock = merkleBlock.header.GetHash();
 
-    LOCK2(cs_main, pwalletMain->cs_wallet);
+    LOCK2(cs_main, pwallet->cs_wallet);
 
-    if (pwalletMain->IsMine(tx)) {
-        pwalletMain->AddToWallet(wtx, false);
+    if (pwallet->IsMine(tx)) {
+        pwallet->AddToWallet(wtx, false);
         return NullUniValue;
     }
 
@@ -314,7 +321,9 @@ UniValue importprunedfunds(const JSONRPCRequest& request)
 
 UniValue removeprunedfunds(const JSONRPCRequest& request)
 {
-    if (!EnsureWalletIsAvailable(pwalletMain, request.fHelp))
+    CWallet * const pwallet = GetWalletForJSONRPCRequest(request);
+
+    if (!EnsureWalletIsAvailable(pwallet, request.fHelp))
         return NullUniValue;
 
     if (request.fHelp || request.params.size() != 1)
@@ -329,7 +338,7 @@ UniValue removeprunedfunds(const JSONRPCRequest& request)
             + HelpExampleRpc("removprunedfunds", "\"a8d0c0184dde994a09ec054286f1ce581bebf46446a512166eae7628734ea0a5\"")
         );
 
-    LOCK2(cs_main, pwalletMain->cs_wallet);
+    LOCK2(cs_main, pwallet->cs_wallet);
 
     uint256 hash;
     hash.SetHex(request.params[0].get_str());
@@ -337,7 +346,7 @@ UniValue removeprunedfunds(const JSONRPCRequest& request)
     vHash.push_back(hash);
     vector<uint256> vHashOut;
 
-    if(pwalletMain->ZapSelectTx(vHash, vHashOut) != DB_LOAD_OK) {
+    if(pwallet->ZapSelectTx(vHash, vHashOut) != DB_LOAD_OK) {
         throw JSONRPCError(RPC_INTERNAL_ERROR, "Could not properly delete the transaction.");
     }
 
@@ -350,7 +359,9 @@ UniValue removeprunedfunds(const JSONRPCRequest& request)
 
 UniValue importpubkey(const JSONRPCRequest& request)
 {
-    if (!EnsureWalletIsAvailable(pwalletMain, request.fHelp))
+    CWallet * const pwallet = GetWalletForJSONRPCRequest(request);
+
+    if (!EnsureWalletIsAvailable(pwallet, request.fHelp))
         return NullUniValue;
 
     if (request.fHelp || request.params.size() < 1 || request.params.size() > 4)
@@ -391,15 +402,15 @@ UniValue importpubkey(const JSONRPCRequest& request)
     if (!pubKey.IsFullyValid())
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Pubkey is not a valid public key");
 
-    LOCK2(cs_main, pwalletMain->cs_wallet);
+    LOCK2(cs_main, pwallet->cs_wallet);
 
-    ImportAddress(pwalletMain, CBitcoinAddress(pubKey.GetID()), strLabel);
-    ImportScript(pwalletMain, GetScriptForRawPubKey(pubKey), strLabel, false);
+    ImportAddress(pwallet, CBitcoinAddress(pubKey.GetID()), strLabel);
+    ImportScript(pwallet, GetScriptForRawPubKey(pubKey), strLabel, false);
 
     if (fRescan)
     {
-        pwalletMain->ScanForWalletTransactions(chainActive.Genesis(), true);
-        pwalletMain->ReacceptWalletTransactions();
+        pwallet->ScanForWalletTransactions(chainActive.Genesis(), true);
+        pwallet->ReacceptWalletTransactions();
     }
 
     return NullUniValue;
@@ -408,7 +419,9 @@ UniValue importpubkey(const JSONRPCRequest& request)
 
 UniValue importwallet(const JSONRPCRequest& request)
 {
-    if (!EnsureWalletIsAvailable(pwalletMain, request.fHelp))
+    CWallet * const pwallet = GetWalletForJSONRPCRequest(request);
+
+    if (!EnsureWalletIsAvailable(pwallet, request.fHelp))
         return NullUniValue;
     
     if (request.fHelp || request.params.size() != 1)
@@ -429,9 +442,9 @@ UniValue importwallet(const JSONRPCRequest& request)
     if (fPruneMode)
         throw JSONRPCError(RPC_WALLET_ERROR, "Importing wallets is disabled in pruned mode");
 
-    LOCK2(cs_main, pwalletMain->cs_wallet);
+    LOCK2(cs_main, pwallet->cs_wallet);
 
-    EnsureWalletIsUnlocked(pwalletMain);
+    EnsureWalletIsUnlocked(pwallet);
 
     ifstream file;
     file.open(request.params[0].get_str().c_str(), std::ios::in | std::ios::ate);
@@ -445,9 +458,9 @@ UniValue importwallet(const JSONRPCRequest& request)
     int64_t nFilesize = std::max((int64_t)1, (int64_t)file.tellg());
     file.seekg(0, file.beg);
 
-    pwalletMain->ShowProgress(_("Importing..."), 0); // show progress dialog in GUI
+    pwallet->ShowProgress(_("Importing..."), 0); // show progress dialog in GUI
     while (file.good()) {
-        pwalletMain->ShowProgress("", std::max(1, std::min(99, (int)(((double)file.tellg() / (double)nFilesize) * 100))));
+        pwallet->ShowProgress("", std::max(1, std::min(99, (int)(((double)file.tellg() / (double)nFilesize) * 100))));
         std::string line;
         std::getline(file, line);
         if (line.empty() || line[0] == '#')
@@ -464,7 +477,7 @@ UniValue importwallet(const JSONRPCRequest& request)
         CPubKey pubkey = key.GetPubKey();
         assert(key.VerifyPubKey(pubkey));
         CKeyID keyid = pubkey.GetID();
-        if (pwalletMain->HaveKey(keyid)) {
+        if (pwallet->HaveKey(keyid)) {
             LogPrintf("Skipping import of %s (key already present)\n", CBitcoinAddress(keyid).ToString());
             continue;
         }
@@ -484,28 +497,28 @@ UniValue importwallet(const JSONRPCRequest& request)
             }
         }
         LogPrintf("Importing %s...\n", CBitcoinAddress(keyid).ToString());
-        if (!pwalletMain->AddKeyPubKey(key, pubkey)) {
+        if (!pwallet->AddKeyPubKey(key, pubkey)) {
             fGood = false;
             continue;
         }
-        pwalletMain->mapKeyMetadata[keyid].nCreateTime = nTime;
+        pwallet->mapKeyMetadata[keyid].nCreateTime = nTime;
         if (fLabel)
-            pwalletMain->SetAddressBook(keyid, strLabel, "receive");
+            pwallet->SetAddressBook(keyid, strLabel, "receive");
         nTimeBegin = std::min(nTimeBegin, nTime);
     }
     file.close();
-    pwalletMain->ShowProgress("", 100); // hide progress dialog in GUI
+    pwallet->ShowProgress("", 100); // hide progress dialog in GUI
 
     CBlockIndex *pindex = chainActive.Tip();
     while (pindex && pindex->pprev && pindex->GetBlockTime() > nTimeBegin - 7200)
         pindex = pindex->pprev;
 
-    if (!pwalletMain->nTimeFirstKey || nTimeBegin < pwalletMain->nTimeFirstKey)
-        pwalletMain->nTimeFirstKey = nTimeBegin;
+    if (!pwallet->nTimeFirstKey || nTimeBegin < pwallet->nTimeFirstKey)
+        pwallet->nTimeFirstKey = nTimeBegin;
 
     LogPrintf("Rescanning last %i blocks\n", chainActive.Height() - pindex->nHeight + 1);
-    pwalletMain->ScanForWalletTransactions(pindex);
-    pwalletMain->MarkDirty();
+    pwallet->ScanForWalletTransactions(pindex);
+    pwallet->MarkDirty();
 
     if (!fGood)
         throw JSONRPCError(RPC_WALLET_ERROR, "Error adding some keys to wallet");
@@ -515,7 +528,9 @@ UniValue importwallet(const JSONRPCRequest& request)
 
 UniValue dumpprivkey(const JSONRPCRequest& request)
 {
-    if (!EnsureWalletIsAvailable(pwalletMain, request.fHelp))
+    CWallet * const pwallet = GetWalletForJSONRPCRequest(request);
+
+    if (!EnsureWalletIsAvailable(pwallet, request.fHelp))
         return NullUniValue;
     
     if (request.fHelp || request.params.size() != 1)
@@ -533,9 +548,9 @@ UniValue dumpprivkey(const JSONRPCRequest& request)
             + HelpExampleRpc("dumpprivkey", "\"myaddress\"")
         );
 
-    LOCK2(cs_main, pwalletMain->cs_wallet);
+    LOCK2(cs_main, pwallet->cs_wallet);
 
-    EnsureWalletIsUnlocked(pwalletMain);
+    EnsureWalletIsUnlocked(pwallet);
 
     string strAddress = request.params[0].get_str();
     CBitcoinAddress address;
@@ -545,7 +560,7 @@ UniValue dumpprivkey(const JSONRPCRequest& request)
     if (!address.GetKeyID(keyID))
         throw JSONRPCError(RPC_TYPE_ERROR, "Address does not refer to a key");
     CKey vchSecret;
-    if (!pwalletMain->GetKey(keyID, vchSecret))
+    if (!pwallet->GetKey(keyID, vchSecret))
         throw JSONRPCError(RPC_WALLET_ERROR, "Private key for address " + strAddress + " is not known");
     return CBitcoinSecret(vchSecret).ToString();
 }
@@ -553,7 +568,9 @@ UniValue dumpprivkey(const JSONRPCRequest& request)
 
 UniValue dumpwallet(const JSONRPCRequest& request)
 {
-    if (!EnsureWalletIsAvailable(pwalletMain, request.fHelp))
+    CWallet * const pwallet = GetWalletForJSONRPCRequest(request);
+
+    if (!EnsureWalletIsAvailable(pwallet, request.fHelp))
         return NullUniValue;
     
     if (request.fHelp || request.params.size() != 1)
@@ -567,9 +584,9 @@ UniValue dumpwallet(const JSONRPCRequest& request)
             + HelpExampleRpc("dumpwallet", "\"test\"")
         );
 
-    LOCK2(cs_main, pwalletMain->cs_wallet);
+    LOCK2(cs_main, pwallet->cs_wallet);
 
-    EnsureWalletIsUnlocked(pwalletMain);
+    EnsureWalletIsUnlocked(pwallet);
 
     ofstream file;
     file.open(request.params[0].get_str().c_str());
@@ -578,8 +595,8 @@ UniValue dumpwallet(const JSONRPCRequest& request)
 
     std::map<CKeyID, int64_t> mapKeyBirth;
     std::set<CKeyID> setKeyPool;
-    pwalletMain->GetKeyBirthTimes(mapKeyBirth);
-    pwalletMain->GetAllReserveKeys(setKeyPool);
+    pwallet->GetKeyBirthTimes(mapKeyBirth);
+    pwallet->GetAllReserveKeys(setKeyPool);
 
     // sort time/key pairs
     std::vector<std::pair<int64_t, CKeyID> > vKeyBirth;
@@ -597,11 +614,11 @@ UniValue dumpwallet(const JSONRPCRequest& request)
     file << "\n";
 
     // add the base58check encoded extended master if the wallet uses HD 
-    CKeyID masterKeyID = pwalletMain->GetHDChain().masterKeyID;
+    CKeyID masterKeyID = pwallet->GetHDChain().masterKeyID;
     if (!masterKeyID.IsNull())
     {
         CKey key;
-        if (pwalletMain->GetKey(masterKeyID, key))
+        if (pwallet->GetKey(masterKeyID, key))
         {
             CExtKey masterKey;
             masterKey.SetMaster(key.begin(), key.size());
@@ -617,20 +634,20 @@ UniValue dumpwallet(const JSONRPCRequest& request)
         std::string strTime = EncodeDumpTime(it->first);
         std::string strAddr = CBitcoinAddress(keyid).ToString();
         CKey key;
-        if (pwalletMain->GetKey(keyid, key)) {
+        if (pwallet->GetKey(keyid, key)) {
             file << strprintf("%s %s ", CBitcoinSecret(key).ToString(), strTime);
-            if (pwalletMain->mapAddressBook.count(keyid)) {
-                file << strprintf("label=%s", EncodeDumpString(pwalletMain->mapAddressBook[keyid].name));
+            if (pwallet->mapAddressBook.count(keyid)) {
+                file << strprintf("label=%s", EncodeDumpString(pwallet->mapAddressBook[keyid].name));
             } else if (keyid == masterKeyID) {
                 file << "hdmaster=1";
             } else if (setKeyPool.count(keyid)) {
                 file << "reserve=1";
-            } else if (pwalletMain->mapKeyMetadata[keyid].hdKeypath == "m") {
+            } else if (pwallet->mapKeyMetadata[keyid].hdKeypath == "m") {
                 file << "inactivehdmaster=1";
             } else {
                 file << "change=1";
             }
-            file << strprintf(" # addr=%s%s\n", strAddr, (pwalletMain->mapKeyMetadata[keyid].hdKeypath.size() > 0 ? " hdkeypath="+pwalletMain->mapKeyMetadata[keyid].hdKeypath : ""));
+            file << strprintf(" # addr=%s%s\n", strAddr, (pwallet->mapKeyMetadata[keyid].hdKeypath.size() > 0 ? " hdkeypath="+pwallet->mapKeyMetadata[keyid].hdKeypath : ""));
         }
     }
     file << "\n";
@@ -960,6 +977,8 @@ UniValue processImport(CWallet * const pwallet, const UniValue& data) {
 
 UniValue importmulti(const JSONRPCRequest& mainRequest)
 {
+    CWallet * const pwallet = GetWalletForJSONRPCRequest(mainRequest);
+
     // clang-format off
     if (mainRequest.fHelp || mainRequest.params.size() < 1 || mainRequest.params.size() > 2)
         throw runtime_error(
@@ -993,7 +1012,7 @@ UniValue importmulti(const JSONRPCRequest& mainRequest)
             "  [{ \"success\": true } , { \"success\": false, \"error\": { \"code\": -1, \"message\": \"Internal Server Error\"} }, ... ]\n");
 
     // clang-format on
-    if (!EnsureWalletIsAvailable(pwalletMain, mainRequest.fHelp)) {
+    if (!EnsureWalletIsAvailable(pwallet, mainRequest.fHelp)) {
         return NullUniValue;
     }
 
@@ -1012,8 +1031,8 @@ UniValue importmulti(const JSONRPCRequest& mainRequest)
         }
     }
 
-    LOCK2(cs_main, pwalletMain->cs_wallet);
-    EnsureWalletIsUnlocked(pwalletMain);
+    LOCK2(cs_main, pwallet->cs_wallet);
+    EnsureWalletIsUnlocked(pwallet);
 
     bool fRunScan = false;
     const int64_t minimumTimestamp = 1;
@@ -1028,7 +1047,7 @@ UniValue importmulti(const JSONRPCRequest& mainRequest)
     UniValue response(UniValue::VARR);
 
     BOOST_FOREACH (const UniValue& data, requests.getValues()) {
-        const UniValue result = processImport(pwalletMain, data);
+        const UniValue result = processImport(pwallet, data);
         response.push_back(result);
 
         if (!fRescan) {
@@ -1052,8 +1071,8 @@ UniValue importmulti(const JSONRPCRequest& mainRequest)
         CBlockIndex* pindex = nLowestTimestamp > minimumTimestamp ? chainActive.FindLatestBefore(nLowestTimestamp) : chainActive.Genesis();
 
         if (pindex) {
-            pwalletMain->ScanForWalletTransactions(pindex, true);
-            pwalletMain->ReacceptWalletTransactions();
+            pwallet->ScanForWalletTransactions(pindex, true);
+            pwallet->ReacceptWalletTransactions();
         }
     }
 
