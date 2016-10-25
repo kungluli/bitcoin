@@ -103,8 +103,9 @@ UniValue getinfo(const JSONRPCRequest& request)
         obj.push_back(Pair("keypoololdest", pwallet->GetOldestKeyPoolTime()));
         obj.push_back(Pair("keypoolsize",   (int)pwallet->GetKeyPoolSize()));
     }
-    if (pwallet && pwallet->IsCrypted())
+    if (pwallet && pwallet->IsCrypted()) {
         obj.push_back(Pair("unlocked_until", pwallet->nRelockTime));
+    }
     obj.push_back(Pair("paytxfee",      ValueFromAmount(payTxFee.GetFeePerK())));
 #endif
     obj.push_back(Pair("relayfee",      ValueFromAmount(::minRelayTxFee.GetFeePerK())));
@@ -211,11 +212,11 @@ UniValue validateaddress(const JSONRPCRequest& request)
         ret.push_back(Pair("iswatchonly", (mine & ISMINE_WATCH_ONLY) ? true: false));
         UniValue detail = boost::apply_visitor(DescribeAddressVisitor(pwallet), dest);
         ret.pushKVs(detail);
-        if (pwallet && pwallet->mapAddressBook.count(dest))
+        if (pwallet && pwallet->mapAddressBook.count(dest)) {
             ret.push_back(Pair("account", pwallet->mapAddressBook[dest].name));
+        }
         CKeyID keyID;
-        if (pwallet && address.GetKeyID(keyID) && pwallet->mapKeyMetadata.count(keyID) && !pwallet->mapKeyMetadata[keyID].hdKeypath.empty())
-        {
+        if (pwallet && address.GetKeyID(keyID) && pwallet->mapKeyMetadata.count(keyID) && !pwallet->mapKeyMetadata[keyID].hdKeypath.empty()) {
             ret.push_back(Pair("hdkeypath", pwallet->mapKeyMetadata[keyID].hdKeypath));
             ret.push_back(Pair("hdmasterkeyid", pwallet->mapKeyMetadata[keyID].hdMasterKeyID.GetHex()));
         }
@@ -252,16 +253,16 @@ CScript _createmultisig_redeemScript(void * const _pwallet, const UniValue& para
 #ifdef ENABLE_WALLET
         // Case 1: Bitcoin address and we have full public key:
         CBitcoinAddress address(ks);
-        if (pwallet && address.IsValid())
-        {
+        if (pwallet && address.IsValid()) {
             CKeyID keyID;
             if (!address.GetKeyID(keyID))
                 throw runtime_error(
                     strprintf("%s does not refer to a key",ks));
             CPubKey vchPubKey;
-            if (!pwallet->GetPubKey(keyID, vchPubKey))
+            if (!pwallet->GetPubKey(keyID, vchPubKey)) {
                 throw runtime_error(
                     strprintf("no full public key for address %s",ks));
+            }
             if (!vchPubKey.IsFullyValid())
                 throw runtime_error(" Invalid public key: "+ks);
             pubkeys[i] = vchPubKey;
